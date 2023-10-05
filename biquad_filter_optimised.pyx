@@ -1,8 +1,10 @@
 '''
-    C++ optimised implementation of a biquad filter,
-    (approximately 8.5 times faster).
+    C++ implementation of a biquad filter, with a
+    useful calculator function.
 
-    Joe Simon 2018.
+    https://github.com/ignaciodsimon/biquad_filter_optimised
+
+    Joe Simon 2018 - 2023.
 '''
 
 
@@ -13,25 +15,31 @@ import math
 
 
 cpdef enum BiquadFilterType:
-    BPF_NORMALIZED
     HPF
-    BPF
     LPF
+    HPF_FIRST_ORDER
+    LPF_FIRST_ORDER
+    BPF
+    BPF_NORMALIZED
+    PEAK
     NOTCH
     APF
+    APF_FIRST_ORDER
     LOW_SHELVING
+    LOW_SHELVING_FIRST_ORDER
     HIGH_SHELVING
-    PEAK
+    HIGH_SHELVING_FIRST_ORDER
 
 
 cdef class BiquadFilterCoefficients:
-    cdef public double b0, b1, b2, a0, a1, a2
+    cdef public double b0, b1, b2, a0, a0_inv, a1, a2
     def __init__(self, double b0=1.0, double b1=0, double b2=0,
-                 double a0=0, double a1=0, double a2=0):
+                 double a0=0, double a0_inv=0, double a1=0, double a2=0):
         self.b0 = b0
         self.b1 = b1
         self.b2 = b2
         self.a0 = a0
+        self.a0_inv = a0_inv
         self.a1 = a1
         self.a2 = a2
 
@@ -40,11 +48,11 @@ cdef class BiquadFilterParameters:
     cdef public double filterf0, filterQ, filterGaindB, sampleRate
     cdef public BiquadFilterType filterType
     def __init__(self,
-                 double sampleRate=48000.0,
-                 BiquadFilterType filterType=BiquadFilterType.APF,
-                 double filterf0=1000.0,
-                 double filterQ=0.707,
-                 double filterGaindB=0.0):
+                 double           sampleRate   = 48000.0,
+                 BiquadFilterType filterType   = BiquadFilterType.APF,
+                 double           filterf0     = 1000.0,
+                 double           filterQ      = 0.707,
+                 double           filterGaindB = 0.0):
         self.filterf0     = filterf0
         self.filterQ      = filterQ
         self.filterGaindB = filterGaindB
@@ -62,6 +70,7 @@ cdef class BiquadFilter:
     cdef BiquadFilterType _filterType
     cdef BiquadFilterCoefficients _filterCoefficients
     cdef BiquadFilterParameters _filterParameters
+    cdef int _isSecondOrder
 
     def __init__(self, filterParameters=None):
         # Initialize filter parameters to default values if none provided
@@ -77,26 +86,78 @@ cdef class BiquadFilter:
         self._filterCoefficients = BiquadFilterCoefficients()
         self.generateBiQuadCoefficients(self._filterParameters)
 
+    def setCoefficients(self, filterParameters, isSecondOrder):
+        if not isinstance(filterParameters, BiquadFilterCoefficients):
+            raise "The input parameter 'filterParameters' must be of type <BiquadFilterCoefficients>!"
+        if not isinstance(isSecondOrder, bool):
+            raise "The input parameter 'isSecondOrder' must be of type <bool>!"
+        self._filterCoefficients.b0 = filterParameters.b0
+        self._filterCoefficients.b1 = filterParameters.b1
+        self._filterCoefficients.b2 = filterParameters.b2
+        self._filterCoefficients.a0 = filterParameters.a0
+        self._filterCoefficients.a0_inv = (1.0 / self._filterCoefficients.a0) if not self._filterCoefficients.a0 == 0.0 else 0.0
+        self._filterCoefficients.a1 = filterParameters.a1
+        self._filterCoefficients.a2 = filterParameters.a2
+        self._isSecondOrder = isSecondOrder
+
+    def getCoefficients(self):
+        return self._filterCoefficients
+
+    def _filterTypeToString(self, filterType):
+        if filterType == BiquadFilterType.BPF_NORMALIZED:
+            return "BPF_NORMALIZED"
+        if filterType == BiquadFilterType.HPF:
+            return "HPF"
+        if filterType == BiquadFilterType.BPF:
+            return "BPF"
+        if filterType == BiquadFilterType.LPF:
+            return "LPF"
+        if filterType == BiquadFilterType.NOTCH:
+            return "NOTCH"
+        if filterType == BiquadFilterType.APF:
+            return "APF"
+        if filterType == BiquadFilterType.LOW_SHELVING:
+            return "LOW_SHELVING"
+        if filterType == BiquadFilterType.HIGH_SHELVING:
+            return "HIGH_SHELVING"
+        if filterType == BiquadFilterType.PEAK:
+            return "PEAK"
+        if filterType == BiquadFilterType.LPF_FIRST_ORDER:
+            return "LPF_FIRST_ORDER"
+        if filterType == BiquadFilterType.HPF_FIRST_ORDER:
+            return "HPF_FIRST_ORDER"
+        if filterType == BiquadFilterType.APF_FIRST_ORDER:
+            return "APF_FIRST_ORDER"
+        if filterType == BiquadFilterType.LOW_SHELVING_FIRST_ORDER:
+            return "LOW_SHELVING_FIRST_ORDER"
+        if filterType == BiquadFilterType.HIGH_SHELVING_FIRST_ORDER:
+            return "HIGH_SHELVING_FIRST_ORDER"
+        return "Unknown type"
+
     def __str__(self):
-        return "f0:%10.3f Hz, Q: %.3f, Gain: %.3f (%5.1f dB), Type: %s" % \
+        return "f0:%.3f Hz, Q: %.3f, Gain: %.3f (%.1f dB), Type: %s" % \
                 (self._filterParameters.filterf0,
                  self._filterParameters.filterQ,
                  10**(self._filterParameters.filterGaindB/20.0),
                  self._filterParameters.filterGaindB,
-                 str(self._filterParameters.filterType))
+                 self._filterTypeToString(self._filterParameters.filterType))
 
     cpdef double processSample(self, double inputSample):
         self._output  = (inputSample * self._filterCoefficients.b0)
         self._output +=    (self._x1 * self._filterCoefficients.b1)
-        self._output +=    (self._x2 * self._filterCoefficients.b2)
         self._output -=    (self._y1 * self._filterCoefficients.a1)
-        self._output -=    (self._y2 * self._filterCoefficients.a2)
-        self._output /=                self._filterCoefficients.a0
+        if self._isSecondOrder:
+            self._output += (self._x2 * self._filterCoefficients.b2)
+            self._output -= (self._y2 * self._filterCoefficients.a2)
+        self._output     *=  self._filterCoefficients.a0_inv
+
         # Rotate states
-        self._x2 = self._x1
+        if self._isSecondOrder:
+            self._x2 = self._x1
+            self._y2 = self._y1
         self._x1 = inputSample
-        self._y2 = self._y1
         self._y1 = self._output
+
         # Return new output
         return self._output
 
@@ -121,7 +182,39 @@ cdef class BiquadFilter:
         _alpha = math.sin(_omega0) / (2 * filterQ)
 
         # Coefficients calculation
-        if filterType == BiquadFilterType.BPF_NORMALIZED:
+        if filterType == BiquadFilterType.APF_FIRST_ORDER:
+            K = math.tan(math.pi * filterf0 / _parameters.sampleRate)
+            _b0 = (1 - K) / (1 + K)
+            _b1 = -1
+            _b2 = 0
+            _a0 =  1.0
+            _a1 = -_b0
+            _a2 = 0
+            self._isSecondOrder = 0
+
+        elif filterType == BiquadFilterType.HPF_FIRST_ORDER:
+            # First-order high-pass
+            _a0 =  1.0 + (_omega0 / 2.0)
+            _a1 = -2.0 + _a0
+            _a2 =  0.0
+            _b0 =  1.0
+            _b1 = -1.0
+            _b2 =  0.0
+            self._isSecondOrder = 0
+            # print("f0: %f\nSample rate: %f\nB0: %f\nB1: %f\nB2: %f\nA0: %f\nA1: %f\nA2: %f" % (filterf0, _parameters.sampleRate, _b0, _b1, _b2, _a0, _a1, _a2))
+
+        elif filterType == BiquadFilterType.LPF_FIRST_ORDER:
+            # First-order low-pass
+            _a0 = 1.0
+            _a1 = -math.exp(-2.0 * math.pi * (filterf0 / _parameters.sampleRate))
+            _a2 = 0.0
+            _b0 = 1.0 + _a1;
+            _b1 = 0.0
+            _b2 = 0.0
+            self._isSecondOrder = 0
+            # print("f0: %f\nSample rate: %f\nB0: %f\nB1: %f\nB2: %f\nA0: %f\nA1: %f\nA2: %f" % (filterf0, _parameters.sampleRate, _b0, _b1, _b2, _a0, _a1, _a2))
+
+        elif filterType == BiquadFilterType.BPF_NORMALIZED:
             # BPF-Normalized:
             _b0 = _alpha
             _b1 = 0
@@ -129,6 +222,7 @@ cdef class BiquadFilter:
             _a0 = 1 + _alpha
             _a1 = -2 * math.cos(_omega0)
             _a2 = 1 - _alpha
+            self._isSecondOrder = 1
 
         elif filterType == BiquadFilterType.HPF:
             # HPF:
@@ -138,6 +232,7 @@ cdef class BiquadFilter:
             _a0 = 1 + _alpha
             _a1 = -2 * math.cos(_omega0)
             _a2 = 1 - _alpha
+            self._isSecondOrder = 1
 
         elif filterType == BiquadFilterType.BPF:
             # BPF:
@@ -147,6 +242,7 @@ cdef class BiquadFilter:
             _a0 = 1 + _alpha
             _a1 = -2 * math.cos(_omega0)
             _a2 = 1 - _alpha
+            self._isSecondOrder = 1
 
         elif filterType == BiquadFilterType.LPF:
             # LPF:
@@ -156,6 +252,7 @@ cdef class BiquadFilter:
             _a0 = 1 + _alpha
             _a1 = -2 * math.cos(_omega0)
             _a2 = 1 - _alpha
+            self._isSecondOrder = 1
 
         elif filterType == BiquadFilterType.NOTCH:
             # NOTCH:
@@ -165,6 +262,7 @@ cdef class BiquadFilter:
             _a0 = 1 + _alpha
             _a1 = -2 * math.cos(_omega0)
             _a2 = 1 - _alpha
+            self._isSecondOrder = 1
         
         elif filterType == BiquadFilterType.APF:
             # APF:
@@ -174,6 +272,7 @@ cdef class BiquadFilter:
             _a0 = 1 + _alpha
             _a1 = -2 * math.cos(_omega0)
             _a2 = 1 - _alpha
+            self._isSecondOrder = 1
 
         elif filterType == BiquadFilterType.PEAK:
             # PEAK:
@@ -184,6 +283,7 @@ cdef class BiquadFilter:
             _a0 = 1 + (_alpha / A)
             _a1 = -2 * math.cos(_omega0)
             _a2 = 1 - (_alpha / A)
+            self._isSecondOrder = 1
 
         elif filterType == BiquadFilterType.LOW_SHELVING:
             # LO-SHELVING:
@@ -194,6 +294,7 @@ cdef class BiquadFilter:
             _a0 = (A + 1) + (A - 1)*math.cos(_omega0) + 2*math.sqrt(A)*_alpha
             _a1 = -2 * ((A - 1) + (A + 1)*math.cos(_omega0))
             _a2 = (A + 1) + (A - 1)*math.cos(_omega0) - 2*math.sqrt(A)*_alpha
+            self._isSecondOrder = 1
 
         elif filterType == BiquadFilterType.HIGH_SHELVING:
             # HI-SHELVING:
@@ -204,7 +305,47 @@ cdef class BiquadFilter:
             _a0 = (A + 1) - (A - 1)*math.cos(_omega0) + 2*math.sqrt(A)*_alpha
             _a1 = 2 * ((A - 1) - (A + 1)*math.cos(_omega0))
             _a2 = (A + 1) - (A - 1)*math.cos(_omega0) - 2*math.sqrt(A)*_alpha
+            self._isSecondOrder = 1
 
+        elif filterType == BiquadFilterType.HIGH_SHELVING_FIRST_ORDER:
+            g2 = 10.0**(filterGain/ 20.0)
+            k2 = math.sqrt(g2)
+            B0 = g2
+            B1 = g2 * 2.0 * math.pi * filterf0 / k2
+            B2 = 0.0
+            A0 = 1.0
+            A1 = 2 * math.pi * filterf0 * k2
+            A2 = 0.0
+            C = 2.0 * _parameters.sampleRate # no pre-warping
+            CC = C * C
+            _a0 = (A2 + A1 * C + A0 * CC) / (4 * CC)
+            _a1 = (A2 - A0 * CC) / (2 * CC * _a0)
+            _a2 = (A2 - A1 * C + A0 * CC) / (4 * CC * _a0)
+            _b0 = (B2 + B1 * C + B0 * CC) / (4 * CC * _a0)
+            _b1 = (B2 - B0 * CC) / (2 * CC * _a0)
+            _b2 = (B2 - B1 * C + B0 * CC) / (4 * CC * _a0)
+            _a0 = 1.0
+            self._isSecondOrder = 1
+
+        elif filterType == BiquadFilterType.LOW_SHELVING_FIRST_ORDER:
+            g1 = 10.0**(filterGain / 20.0)
+            k1 = math.sqrt(g1)
+            B0 = 1.0
+            B1 = 2 * math.pi * filterf0 * k1
+            B2 = 0.0
+            A0 = 1.0
+            A1 = 2.0 * math.pi * filterf0 / k1
+            A2 = 0.0
+            C = 2.0 * _parameters.sampleRate # no pre-warping
+            CC = C * C
+            _a0 = (A2 + A1 * C + A0 * CC) / (4 * CC)
+            _a1 = (A2 - A0 * CC) / (2 * CC * _a0)
+            _a2 = (A2 - A1 * C + A0 * CC) / (4 * CC * _a0)
+            _b0 = (B2 + B1 * C + B0 * CC) / (4 * CC * _a0)
+            _b1 = (B2 - B0 * CC) / (2 * CC * _a0)
+            _b2 = (B2 - B1 * C + B0 * CC) / (4 * CC * _a0)
+            _a0 = 1.0
+            self._isSecondOrder = 1
         else:
             # Unknown type of filter:
             _b0 = 1.0
@@ -213,11 +354,13 @@ cdef class BiquadFilter:
             _a0 = 0.0
             _a1 = 0.0
             _a2 = 0.0
+            self._isSecondOrder = 0
 
         self._filterCoefficients.b0 = _b0
         self._filterCoefficients.b1 = _b1
         self._filterCoefficients.b2 = _b2
         self._filterCoefficients.a0 = _a0
+        self._filterCoefficients.a0_inv = (1.0 / _a0) if not _a0 == 0.0 else 0.0
         self._filterCoefficients.a1 = _a1
         self._filterCoefficients.a2 = _a2
 
@@ -238,3 +381,23 @@ cdef class BiquadFilter:
         cdef complex f
         import cmath
         return [(b0 + (b1*cmath.exp(-1j*2*pi*f)) + (b2 * cmath.exp(-2j*2*pi*f))) / (a0 + (a1*cmath.exp(-1j*2*pi*f)) + (a2*cmath.exp(-2j*2*pi*f))) for f in normalizedFreqBins]
+
+    cpdef calculateCascadedQ(self, combinedOrder):
+        '''
+            Calculates the Q factor of cascaded filters
+            to produce a Butterworth type of response.
+        '''
+        _pairs = combinedOrder >> 1
+        _poleIncrement = math.pi / combinedOrder
+        _firstAngle = _poleIncrement
+
+        _qValues = []
+        if not combinedOrder & 1: # If a first-order filter is needed
+            _firstAngle /= 2
+        else:
+            _qValues.append([1.0, 0.5])
+
+        for idx in range(_pairs):
+            _qValues.append([2.0, 1.0 / (2.0 * math.cos(_firstAngle + idx * _poleIncrement))])
+
+        return _qValues

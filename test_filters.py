@@ -1,71 +1,63 @@
 """
-    This script is used to test both implementations of 
-    the biquad filter and measure their time performance.
+    This script is used to demonstrate the usage of the biquad
+    filter library.
 
-    Joe Simon 2018.
+    https://github.com/ignaciodsimon/biquad_filter_optimised
+
+    Joe Simon 2018 - 2023.
 """
 
-import biquad_filter_optimised
-import biquad_filter_original
+from biquad_filter_optimised import *
 import numpy
 import matplotlib.pyplot as plot
-import time
 
 
 if __name__ == '__main__':
 
-    _sampleRate = 48000.0
-    print("Instantiating filters ...")
-    _filter1 = biquad_filter_original.BiquadFilter(sampleRate=_sampleRate)
-    _filter2 = biquad_filter_optimised.BiquadFilter()
+    sampleRate = 48000.0
+    filt = BiquadFilter()
 
-    print("Generating filter coefficients ...")
-    _filter1.generateBiQuadCoefficients(filterf0=1000, filterQ=0.707, filterType=biquad_filter_original.BiquadFilterType.LPF)
-    _filter2.generateBiQuadCoefficients(biquad_filter_optimised.BiquadFilterParameters(filterf0=1000, filterQ=0.707, filterType=biquad_filter_optimised.BiquadFilterType.LPF))
+    types = [
+        BiquadFilterType.BPF_NORMALIZED,
+        BiquadFilterType.HPF,
+        BiquadFilterType.BPF,
+        BiquadFilterType.LPF,
+        BiquadFilterType.NOTCH,
+        BiquadFilterType.APF,
+        BiquadFilterType.LOW_SHELVING,
+        BiquadFilterType.HIGH_SHELVING,
+        BiquadFilterType.PEAK,
+        BiquadFilterType.LPF_FIRST_ORDER,
+        BiquadFilterType.HPF_FIRST_ORDER,
+        BiquadFilterType.APF_FIRST_ORDER,
+        BiquadFilterType.LOW_SHELVING_FIRST_ORDER,
+        BiquadFilterType.HIGH_SHELVING_FIRST_ORDER]
 
-    # Example of how to use the method 'computeBiquadFilterResponse()' without
-    # having to 'measure' it passing a test signal and alysing the output.
-    #
-    # _filter2Response = _filter2.computeBiquadFilterResponse([i/_sampleRate for i in range(int(_sampleRate/2))])
-    # plot.subplot(2,1,1)
-    # plot.semilogx(20.0*numpy.log10(numpy.abs(_filter2Response)))
-    # plot.ylim([-60, 10])
-    # plot.grid(1)
-    # plot.subplot(2,1,2)
-    # plot.semilogx(180.0 / numpy.pi * numpy.angle(_filter2Response))
-    # plot.grid(1)
-    # plot.show()
+    for index, filterType in enumerate(types):
 
-    _impulse = [0.0]*int(_sampleRate * 10.0)
-    _impulse[0] = 1.0
-    print("Processing impulse signal with filters ...")
-    _amountOfTests = 10
-    _timesFilter1 = []
-    _timesFilter2 = []
-    _testStartTime = time.time()
-    for i in range(_amountOfTests):
-        _initialTime1 = time.time()
-        _filter1Output = [_filter1.processSample(inputSample=_sample) for _sample in _impulse]
-        _finalTime1 = time.time()
-        _initialTime2 = time.time()
-        _filter2Output = [_filter2.processSample(_sample) for _sample in _impulse]
-        _finalTime2 = time.time()
-        _timesFilter1.append(_finalTime1 - _initialTime1)
-        _timesFilter2.append(_finalTime2 - _initialTime2)
+        # Tell the filter to calculate new coefficients following the standard parameters
+        filt.generateBiQuadCoefficients(
+            BiquadFilterParameters(
+                sampleRate   = sampleRate,
+                filterf0     = 1000,
+                filterQ      = 2.0,
+                filterGaindB = -20.0,
+                filterType   = filterType))
 
-    _improvementRatios = [_timesFilter1[i] / _timesFilter2[i] for i in range(_amountOfTests)]
-    print("Time improvement ratio: " + str(["%.2f" % _improvementRatios[i] for i in range(_amountOfTests)]))
-    print("Mean improvement ratio: %.2f" % numpy.mean(_improvementRatios))
-    print("Total elapsed time: %.2f [s]" % (time.time() - _testStartTime))
+        # Measure the impulse response
+        IR = [filt.processSample(1.0 if i == 0 else 0.0) for i in range(int(0.5 * sampleRate))]
 
-    print("Plotting filters response ...")
-    _filter1Response = 20.0 * numpy.log10(numpy.abs(numpy.fft.rfft(_filter1Output[:48000])) + 10.0**-200/20.0)
-    _filter2Response = 20.0 * numpy.log10(numpy.abs(numpy.fft.rfft(_filter2Output[:48000])) + 10.0**-200/20.0)
-    _freqAxis = [i * _sampleRate / len(_filter1Response) / 2.0 for i in range(len(_filter1Response))]
-    plot.semilogx(_freqAxis, _filter1Response)
-    plot.semilogx(_freqAxis, _filter2Response)
-    plot.legend(['Original %.1f [s]'  % numpy.mean(_timesFilter1), 'Optimised %.1f [s]' % numpy.mean(_timesFilter2)])
+        # Compute the spectrum module
+        filterResponse = 20.0 * numpy.log10(numpy.abs(numpy.fft.rfft(IR)))
+        freqAxis = [i * sampleRate / len(filterResponse) / 2.0 for i in range(len(filterResponse))]
+
+        # Plot it
+        plot.semilogx(freqAxis, filterResponse, label=filterType)
+
+    plot.xlabel("Frequency [Hz]")
+    plot.ylabel("Magnitude [dB]")
+    plot.legend()
     plot.grid(1)
-    plot.title("Time improvement ratio: %.2f [.]" % numpy.mean(_improvementRatios))
-    plot.ylim([-90, 10])
+    plot.xlim([20, 20e3])
+    plot.ylim([-60, 10])
     plot.show()
