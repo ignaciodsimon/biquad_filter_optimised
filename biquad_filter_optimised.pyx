@@ -13,6 +13,8 @@ import math
 
 # ----------------- Additional classes -----------------
 
+def version():
+    return "1.0.0"
 
 cpdef enum BiquadFilterType:
     HPF
