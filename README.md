@@ -9,7 +9,7 @@ parameters (type, frequency, gain and Q).
 
 From your terminal, run:
 
-    pip install https://github.com/ignaciodsimon/biquad_filter_optimised/archive/refs/heads/master.zip
+    pip3 install https://github.com/ignaciodsimon/biquad_filter_optimised/archive/refs/heads/master.zip
 
 ## Use example
 
