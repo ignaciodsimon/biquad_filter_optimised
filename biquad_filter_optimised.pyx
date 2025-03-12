@@ -13,7 +13,7 @@ import math
 
 # ----------------- Additional classes -----------------
 
-def version():
+def getBiquadFilterVersion():
     return "1.0.0"
 
 cpdef enum BiquadFilterType:
