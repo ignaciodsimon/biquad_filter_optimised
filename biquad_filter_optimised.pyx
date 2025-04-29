@@ -14,7 +14,7 @@ import math
 # ----------------- Additional classes -----------------
 
 def getBiquadFilterVersion():
-    return "1.0.0"
+    return "1.0.1"
 
 cpdef enum BiquadFilterType:
     HPF
@@ -47,19 +47,21 @@ cdef class BiquadFilterCoefficients:
 
 
 cdef class BiquadFilterParameters:
-    cdef public double filterf0, filterQ, filterGaindB, sampleRate
+    cdef public double filterf0, filterQ, filterGaindB, sampleRate, filterMasterGaindB
     cdef public BiquadFilterType filterType
     def __init__(self,
                  double           sampleRate   = 48000.0,
                  BiquadFilterType filterType   = BiquadFilterType.APF,
                  double           filterf0     = 1000.0,
                  double           filterQ      = 0.707,
-                 double           filterGaindB = 0.0):
+                 double           filterGaindB = 0.0,
+                 double           filterMasterGaindB = 0.0):
         self.filterf0     = filterf0
         self.filterQ      = filterQ
         self.filterGaindB = filterGaindB
         self.filterType   = filterType
         self.sampleRate   = sampleRate
+        self.filterMasterGaindB = filterMasterGaindB
 
 
 # ------------------ Main filter part ------------------
@@ -72,6 +74,7 @@ cdef class BiquadFilter:
     cdef BiquadFilterType _filterType
     cdef BiquadFilterCoefficients _filterCoefficients
     cdef BiquadFilterParameters _filterParameters
+    cdef double _masterGain
     cdef int _isSecondOrder
 
     def __init__(self, filterParameters=None):
@@ -84,6 +87,7 @@ cdef class BiquadFilter:
         self._y1 = 0.0
         self._y2 = 0.0
         self._output = 0.0
+        self._masterGain = 1.0
         # Generate filter coefficients
         self._filterCoefficients = BiquadFilterCoefficients()
         self.generateBiQuadCoefficients(self._filterParameters)
@@ -161,7 +165,7 @@ cdef class BiquadFilter:
         self._y1 = self._output
 
         # Return new output
-        return self._output
+        return self._output * self._masterGain
 
 
     cpdef void generateBiQuadCoefficients(self, BiquadFilterParameters _parameters):
@@ -365,6 +369,11 @@ cdef class BiquadFilter:
         self._filterCoefficients.a0_inv = (1.0 / _a0) if not _a0 == 0.0 else 0.0
         self._filterCoefficients.a1 = _a1
         self._filterCoefficients.a2 = _a2
+
+        # The master gain is not applied to the coefficients so that getting / setting them works independently
+        # from the "output volume setting"
+        self._masterGain = 10**(_parameters.filterMasterGaindB / 20.0)
+
 
 
 # --------------- Additional filter tools --------------
