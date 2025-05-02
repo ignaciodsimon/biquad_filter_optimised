@@ -13,9 +13,6 @@ import math
 
 # ----------------- Additional classes -----------------
 
-def getBiquadFilterVersion():
-    return "1.0.1"
-
 cpdef enum BiquadFilterType:
     HPF
     LPF
@@ -34,14 +31,13 @@ cpdef enum BiquadFilterType:
 
 
 cdef class BiquadFilterCoefficients:
-    cdef public double b0, b1, b2, a0, a0_inv, a1, a2
+    cdef public double b0, b1, b2, a0, a1, a2
     def __init__(self, double b0=1.0, double b1=0, double b2=0,
-                 double a0=0, double a0_inv=0, double a1=0, double a2=0):
+                 double a0=0, double a1=0, double a2=0):
         self.b0 = b0
         self.b1 = b1
         self.b2 = b2
         self.a0 = a0
-        self.a0_inv = a0_inv
         self.a1 = a1
         self.a2 = a2
 
@@ -70,41 +66,56 @@ cdef class BiquadFilterParameters:
 cdef class BiquadFilter:
 
     cdef double _output
-    cdef double _x1, _x2, _y1, _y2
+    cdef double _s1, _s2
     cdef BiquadFilterType _filterType
     cdef BiquadFilterCoefficients _filterCoefficients
     cdef BiquadFilterParameters _filterParameters
     cdef double _masterGain
     cdef int _isSecondOrder
 
+    def version(self):
+        return "1.0.2"
+
     def __init__(self, filterParameters=None):
         # Initialize filter parameters to default values if none provided
         self._filterParameters = BiquadFilterParameters() \
             if filterParameters is None else filterParameters
         # Initilize filter states
-        self._x1 = 0.0
-        self._x2 = 0.0
-        self._y1 = 0.0
-        self._y2 = 0.0
+        self._s1 = 0.0
+        self._s2 = 0.0
         self._output = 0.0
         self._masterGain = 1.0
         # Generate filter coefficients
         self._filterCoefficients = BiquadFilterCoefficients()
         self.generateBiQuadCoefficients(self._filterParameters)
 
+    def resetStates(self):
+        self._s1 = 0.0
+        self._s2 = 0.0
+
     def setCoefficients(self, filterParameters, isSecondOrder):
         if not isinstance(filterParameters, BiquadFilterCoefficients):
             raise "The input parameter 'filterParameters' must be of type <BiquadFilterCoefficients>!"
         if not isinstance(isSecondOrder, bool):
             raise "The input parameter 'isSecondOrder' must be of type <bool>!"
-        self._filterCoefficients.b0 = filterParameters.b0
-        self._filterCoefficients.b1 = filterParameters.b1
-        self._filterCoefficients.b2 = filterParameters.b2
-        self._filterCoefficients.a0 = filterParameters.a0
-        self._filterCoefficients.a0_inv = (1.0 / self._filterCoefficients.a0) if not self._filterCoefficients.a0 == 0.0 else 0.0
-        self._filterCoefficients.a1 = filterParameters.a1
-        self._filterCoefficients.a2 = filterParameters.a2
-        self._isSecondOrder = isSecondOrder
+
+        if not filterParameters.a0 == 0.0:
+            self._filterCoefficients.b0 = filterParameters.b0 / filterParameters.a0
+            self._filterCoefficients.b1 = filterParameters.b1 / filterParameters.a0
+            self._filterCoefficients.b2 = filterParameters.b2 / filterParameters.a0
+            self._filterCoefficients.a0 = 1.0
+            self._filterCoefficients.a1 = filterParameters.a1 / filterParameters.a0
+            self._filterCoefficients.a2 = filterParameters.a2 / filterParameters.a0
+            self._isSecondOrder = isSecondOrder
+        else:
+            self._filterCoefficients.b0 = 0.0
+            self._filterCoefficients.b1 = 0.0
+            self._filterCoefficients.b2 = 0.0
+            self._filterCoefficients.a0 = 0.0
+            self._filterCoefficients.a1 = 0.0
+            self._filterCoefficients.a2 = 0.0
+            self._isSecondOrder = False
+
 
     def getCoefficients(self):
         return self._filterCoefficients
@@ -149,24 +160,13 @@ cdef class BiquadFilter:
                  self._filterTypeToString(self._filterParameters.filterType))
 
     cpdef double processSample(self, double inputSample):
-        self._output  = (inputSample * self._filterCoefficients.b0)
-        self._output +=    (self._x1 * self._filterCoefficients.b1)
-        self._output -=    (self._y1 * self._filterCoefficients.a1)
-        if self._isSecondOrder:
-            self._output += (self._x2 * self._filterCoefficients.b2)
-            self._output -= (self._y2 * self._filterCoefficients.a2)
-        self._output     *=  self._filterCoefficients.a0_inv
-
-        # Rotate states
-        if self._isSecondOrder:
-            self._x2 = self._x1
-            self._y2 = self._y1
-        self._x1 = inputSample
-        self._y1 = self._output
-
-        # Return new output
-        return self._output * self._masterGain
-
+        cdef double x = inputSample
+        cdef double y = self._filterCoefficients.b0 * x + self._s1
+        self._s1 = self._filterCoefficients.b1 * x - self._filterCoefficients.a1 * y + self._s2
+        self._s2 = self._filterCoefficients.b2 * x - self._filterCoefficients.a2 * y
+        y *= self._masterGain
+        self._output = y
+        return y
 
     cpdef void generateBiQuadCoefficients(self, BiquadFilterParameters _parameters):
         # print("Generating filter coefficients for parameters: Type=%s, f0=%.1f [Hz], \
@@ -353,31 +353,44 @@ cdef class BiquadFilter:
             _a0 = 1.0
             self._isSecondOrder = 1
         else:
-            # Unknown type of filter:
+            # Unknown type of filter
             _b0 = 1.0
             _b1 = 0.0
             _b2 = 0.0
-            _a0 = 0.0
+            _a0 = 1.0
             _a1 = 0.0
             _a2 = 0.0
             self._isSecondOrder = 0
 
-        self._filterCoefficients.b0 = _b0
-        self._filterCoefficients.b1 = _b1
-        self._filterCoefficients.b2 = _b2
-        self._filterCoefficients.a0 = _a0
-        self._filterCoefficients.a0_inv = (1.0 / _a0) if not _a0 == 0.0 else 0.0
-        self._filterCoefficients.a1 = _a1
-        self._filterCoefficients.a2 = _a2
+        # Just a sanity check
+        if not _a0 == 0.0:
+            self._filterCoefficients.b0 = _b0 / _a0
+            self._filterCoefficients.b1 = _b1 / _a0
+            self._filterCoefficients.b2 = _b2 / _a0
+            self._filterCoefficients.a0 = 1.0
+            self._filterCoefficients.a1 = _a1 / _a0
+            self._filterCoefficients.a2 = _a2 / _a0
+        else:
+            self._filterCoefficients.b0 = 1.0
+            self._filterCoefficients.b1 = 0.0
+            self._filterCoefficients.b2 = 0.0
+            self._filterCoefficients.a0 = 1.0
+            self._filterCoefficients.a1 = 0.0
+            self._filterCoefficients.a2 = 0.0
 
         # The master gain is not applied to the coefficients so that getting / setting them works independently
         # from the "output volume setting"
         self._masterGain = 10**(_parameters.filterMasterGaindB / 20.0)
 
-
+    cpdef reachStationaryState(self, double stationaryInput):
+        cdef double den = (1.0 + self._filterCoefficients.a1 + self._filterCoefficients.a2)
+        if den == 0.0:
+            return
+        cdef double DC_gain = stationaryInput * (self._filterCoefficients.b0 + self._filterCoefficients.b1 + self._filterCoefficients.b2) / den
+        self._s1 = DC_gain - self._filterCoefficients.b0 * stationaryInput
+        self._s2 = self._s1 - self._filterCoefficients.b1 * stationaryInput + self._filterCoefficients.a1 * DC_gain
 
 # --------------- Additional filter tools --------------
-
 
     cpdef computeComplexBiquadFilterResponse(self, normalizedFreqBins):
         cdef complex b0 = self._filterCoefficients.b0

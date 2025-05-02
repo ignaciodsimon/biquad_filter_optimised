@@ -3,7 +3,7 @@ from Cython.Build import cythonize
 
 setup(
     name        = "biquad_filter_optimised",
-    version     = "1.0.1",
+    version     = "1.0.2",
     description = "Biquad filter library with calculator",
     author      = "Joe Simon",
     url         = "https://github.com/ignaciodsimon/biquad_filter_optimised",
