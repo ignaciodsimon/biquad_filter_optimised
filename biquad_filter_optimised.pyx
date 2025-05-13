@@ -74,7 +74,7 @@ cdef class BiquadFilter:
     cdef int _isSecondOrder
 
     def version(self):
-        return "1.1.0"
+        return "1.2.0"
 
     def __init__(self, filterParameters=None):
         # Initialize filter parameters to default values if none provided
@@ -200,12 +200,14 @@ cdef class BiquadFilter:
 
         elif filterType == BiquadFilterType.HPF_FIRST_ORDER:
             # First-order high-pass
-            _a0 =  1.0 + (_omega0 / 2.0)
-            _a1 = -2.0 + _a0
-            _a2 =  0.0
-            _b0 =  1.0
-            _b1 = -1.0
-            _b2 =  0.0
+            K = math.tan(_omega0 / 2)
+            norm = 1.0 / (1.0 + K)
+            _b0 = norm
+            _b1 = -norm
+            _b2 = 0.0
+            _a0 = 1.0
+            _a1 = (K - 1.0) * norm
+            _a2 = 0.0
             self._isSecondOrder = 0
             # print("f0: %f\nSample rate: %f\nB0: %f\nB1: %f\nB2: %f\nA0: %f\nA1: %f\nA2: %f" % (filterf0, _parameters.sampleRate, _b0, _b1, _b2, _a0, _a1, _a2))
 
