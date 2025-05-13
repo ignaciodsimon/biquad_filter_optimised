@@ -26,7 +26,7 @@ From your terminal, run:
             sampleRate   = sampleRate,
             filterf0     = 1000,
             filterQ      = 2.0,
-            filterGaindB = -20.0,
+            filterGaindB = 0.0,
             filterType   = BiquadFilterType.LPF))
     
     # Measure the impulse response
