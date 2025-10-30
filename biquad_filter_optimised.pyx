@@ -67,14 +67,22 @@ cdef class BiquadFilter:
 
     cdef double _output
     cdef double _s1, _s2
+    cdef double _glidingDeltaRatio
+    cdef double _snapError_b0
+    cdef double _snapError_b1
+    cdef double _snapError_b2
+    cdef double _snapError_a1
+    cdef double _snapError_a2
     cdef BiquadFilterType _filterType
-    cdef BiquadFilterCoefficients _filterCoefficients
+    cdef BiquadFilterCoefficients _filterCoefficients_current
+    cdef BiquadFilterCoefficients _filterCoefficients_target
+    cdef bint _isGlidingCoefficients
     cdef BiquadFilterParameters _filterParameters
     cdef double _masterGain
     cdef int _isSecondOrder
 
     def version(self):
-        return "1.2.0"
+        return "1.3.0"
 
     def __init__(self, filterParameters=None):
         # Initialize filter parameters to default values if none provided
@@ -86,39 +94,49 @@ cdef class BiquadFilter:
         self._output = 0.0
         self._masterGain = 1.0
         # Generate filter coefficients
-        self._filterCoefficients = BiquadFilterCoefficients()
+        self._isGlidingCoefficients = False
+        self._glidingDeltaRatio = 0.005
+        self._filterCoefficients_current = BiquadFilterCoefficients()
+        self._filterCoefficients_target = BiquadFilterCoefficients()
         self.generateBiQuadCoefficients(self._filterParameters)
+
+    def setGlidingRatio(self, newGlidingRatio):
+        if newGlidingRatio > 0.1:
+            newGlidingRatio = 0.1
+        elif newGlidingRatio < 1e-5:
+            newGlidingRatio = 1e-5
+        self._glidingDeltaRatio = newGlidingRatio
 
     def resetStates(self):
         self._s1 = 0.0
         self._s2 = 0.0
 
-    def setCoefficients(self, filterParameters, isSecondOrder):
-        if not isinstance(filterParameters, BiquadFilterCoefficients):
-            raise "The input parameter 'filterParameters' must be of type <BiquadFilterCoefficients>!"
+    def setCoefficients(self, filterCoefficients, isSecondOrder):
+        if not isinstance(filterCoefficients, BiquadFilterCoefficients):
+            raise "The input parameter 'filterCoefficients' must be of type <BiquadFilterCoefficients>!"
         if not isinstance(isSecondOrder, bool):
             raise "The input parameter 'isSecondOrder' must be of type <bool>!"
 
-        if not filterParameters.a0 == 0.0:
-            self._filterCoefficients.b0 = filterParameters.b0 / filterParameters.a0
-            self._filterCoefficients.b1 = filterParameters.b1 / filterParameters.a0
-            self._filterCoefficients.b2 = filterParameters.b2 / filterParameters.a0
-            self._filterCoefficients.a0 = 1.0
-            self._filterCoefficients.a1 = filterParameters.a1 / filterParameters.a0
-            self._filterCoefficients.a2 = filterParameters.a2 / filterParameters.a0
+        if not filterCoefficients.a0 == 0.0:
+            self._filterCoefficients_current.b0 = filterCoefficients.b0 / filterCoefficients.a0
+            self._filterCoefficients_current.b1 = filterCoefficients.b1 / filterCoefficients.a0
+            self._filterCoefficients_current.b2 = filterCoefficients.b2 / filterCoefficients.a0
+            self._filterCoefficients_current.a0 = 1.0
+            self._filterCoefficients_current.a1 = filterCoefficients.a1 / filterCoefficients.a0
+            self._filterCoefficients_current.a2 = filterCoefficients.a2 / filterCoefficients.a0
             self._isSecondOrder = isSecondOrder
         else:
-            self._filterCoefficients.b0 = 0.0
-            self._filterCoefficients.b1 = 0.0
-            self._filterCoefficients.b2 = 0.0
-            self._filterCoefficients.a0 = 0.0
-            self._filterCoefficients.a1 = 0.0
-            self._filterCoefficients.a2 = 0.0
+            self._filterCoefficients_current.b0 = 0.0
+            self._filterCoefficients_current.b1 = 0.0
+            self._filterCoefficients_current.b2 = 0.0
+            self._filterCoefficients_current.a0 = 0.0
+            self._filterCoefficients_current.a1 = 0.0
+            self._filterCoefficients_current.a2 = 0.0
             self._isSecondOrder = False
 
 
     def getCoefficients(self):
-        return self._filterCoefficients
+        return self._filterCoefficients_current
 
     def _filterTypeToString(self, filterType):
         if filterType == BiquadFilterType.BPF_NORMALIZED:
@@ -159,16 +177,87 @@ cdef class BiquadFilter:
                  self._filterParameters.filterGaindB,
                  self._filterTypeToString(self._filterParameters.filterType))
 
+    cpdef void _glideCoefficients(self):
+        if not self._isGlidingCoefficients:
+            return
+
+        cdef double error_b0 = self._filterCoefficients_target.b0 - self._filterCoefficients_current.b0
+        cdef double error_b1 = self._filterCoefficients_target.b1 - self._filterCoefficients_current.b1
+        cdef double error_b2 = self._filterCoefficients_target.b2 - self._filterCoefficients_current.b2
+        cdef double error_a1 = self._filterCoefficients_target.a1 - self._filterCoefficients_current.a1
+        cdef double error_a2 = self._filterCoefficients_target.a2 - self._filterCoefficients_current.a2
+
+        # When the delta is less than 0.1% away from the target, snap and call it a day
+        if abs(error_b0) <= self._snapError_b0 and \
+            abs(error_b1) <= self._snapError_b1 and \
+            abs(error_b2) <= self._snapError_b2 and \
+            abs(error_a1) <= self._snapError_a1 and \
+            abs(error_a2) <= self._snapError_a2:
+
+            print("Snap! <----------------------------------------------------------------------")
+
+            self._filterCoefficients_current.b0 = self._filterCoefficients_target.b0
+            self._filterCoefficients_current.b1 = self._filterCoefficients_target.b1
+            self._filterCoefficients_current.b2 = self._filterCoefficients_target.b2
+            self._filterCoefficients_current.a1 = self._filterCoefficients_target.a1
+            self._filterCoefficients_current.a2 = self._filterCoefficients_target.a2
+
+            self._isGlidingCoefficients = False
+            return
+
+        # Otherwise, keep gliding
+        self._filterCoefficients_current.b0 += error_b0 * self._glidingDeltaRatio
+        self._filterCoefficients_current.b1 += error_b1 * self._glidingDeltaRatio
+        self._filterCoefficients_current.b2 += error_b2 * self._glidingDeltaRatio
+        self._filterCoefficients_current.a1 += error_a1 * self._glidingDeltaRatio
+        self._filterCoefficients_current.a2 += error_a2 * self._glidingDeltaRatio
+
     cpdef double processSample(self, double inputSample):
+        # Run the gliders if needed
+        self._glideCoefficients()
+
+        # Compute the filter
         cdef double x = inputSample
-        cdef double y = self._filterCoefficients.b0 * x + self._s1
-        self._s1 = self._filterCoefficients.b1 * x - self._filterCoefficients.a1 * y + self._s2
-        self._s2 = self._filterCoefficients.b2 * x - self._filterCoefficients.a2 * y
+        cdef double y = self._filterCoefficients_current.b0 * x + self._s1
+        self._s1 = self._filterCoefficients_current.b1 * x - self._filterCoefficients_current.a1 * y + self._s2
+        self._s2 = self._filterCoefficients_current.b2 * x - self._filterCoefficients_current.a2 * y
         y *= self._masterGain
         self._output = y
+
         return y
 
-    cpdef void generateBiQuadCoefficients(self, BiquadFilterParameters _parameters):
+    '''
+    cpdef void processBuffer(self, double[:] buffer):
+        """
+        Process an entire buffer of samples in place.
+        Modifies `buffer` directly.
+        """
+        cdef Py_ssize_t i, n = buffer.shape[0]
+        cdef double x, y
+
+        for i in range(n):
+            x = buffer[i]
+            y = self._filterCoefficients.b0 * x + self._s1
+            self._s1 = self._filterCoefficients.b1 * x - self._filterCoefficients.a1 * y + self._s2
+            self._s2 = self._filterCoefficients.b2 * x - self._filterCoefficients.a2 * y
+            y *= self._masterGain
+            self._output = y
+            buffer[i] = y
+    '''
+
+    def processBuffer(self, inputBuffer):
+        for i in range(len(inputBuffer)):
+            inputBuffer[i] = self.processSample(inputBuffer[i])
+
+
+    cpdef void setSampleRate(self, double newSampleRate):
+        if newSampleRate <= 0.0:
+            return
+
+        self._filterParameters.sampleRate = newSampleRate
+        self.generateBiQuadCoefficients(self._filterParameters)
+
+    cpdef void generateBiQuadCoefficients(self, BiquadFilterParameters _parameters, bint useGliders=False):
         # print("Generating filter coefficients for parameters: Type=%s, f0=%.1f [Hz], \
         #       Q=%.2f, Gain=%.1f[dB]" % (str(filterType), filterf0, filterQ, filterGain))
         cdef double filterf0   = _parameters.filterf0
@@ -368,45 +457,73 @@ cdef class BiquadFilter:
             _a2 = 0.0
             self._isSecondOrder = 0
 
-        # Just a sanity check
-        if not _a0 == 0.0:
-            self._filterCoefficients.b0 = _b0 / _a0
-            self._filterCoefficients.b1 = _b1 / _a0
-            self._filterCoefficients.b2 = _b2 / _a0
-            self._filterCoefficients.a0 = 1.0
-            self._filterCoefficients.a1 = _a1 / _a0
-            self._filterCoefficients.a2 = _a2 / _a0
-        else:
-            self._filterCoefficients.b0 = 1.0
-            self._filterCoefficients.b1 = 0.0
-            self._filterCoefficients.b2 = 0.0
-            self._filterCoefficients.a0 = 1.0
-            self._filterCoefficients.a1 = 0.0
-            self._filterCoefficients.a2 = 0.0
-
         # The master gain is not applied to the coefficients so that getting / setting them works independently
         # from the "output volume setting"
         self._masterGain = 10**(_parameters.filterMasterGaindB / 20.0)
 
+        # Just a sanity check
+        if _a0 == 0.0:
+            self._filterCoefficients_current.b0 = 1.0
+            self._filterCoefficients_current.b1 = 0.0
+            self._filterCoefficients_current.b2 = 0.0
+            self._filterCoefficients_current.a0 = 1.0
+            self._filterCoefficients_current.a1 = 0.0
+            self._filterCoefficients_current.a2 = 0.0
+            return
+
+        # Normalise coefficients to eliminate a0
+        _b0 = _b0 / _a0
+        _b1 = _b1 / _a0
+        _b2 = _b2 / _a0
+        _a1 = _a1 / _a0
+        _a2 = _a2 / _a0
+        _a0 = 1.0
+
+        if not useGliders:
+            # Just snap the coefficients and mark gliding as finished
+            self._filterCoefficients_current.b0 = _b0
+            self._filterCoefficients_current.b1 = _b1
+            self._filterCoefficients_current.b2 = _b2
+            self._filterCoefficients_current.a0 = _a0
+            self._filterCoefficients_current.a1 = _a1
+            self._filterCoefficients_current.a2 = _a2
+            self._isGlidingCoefficients = False
+            return
+
+        self._filterCoefficients_target.b0 = _b0
+        self._filterCoefficients_target.b1 = _b1
+        self._filterCoefficients_target.b2 = _b2
+        self._filterCoefficients_target.a0 = _a0
+        self._filterCoefficients_target.a1 = _a1
+        self._filterCoefficients_target.a2 = _a2
+        self._isGlidingCoefficients = True
+
+        # Set the limit for the glider to snap
+        self._snapError_b0 = abs(self._glidingDeltaRatio * self._filterCoefficients_target.b0)
+        self._snapError_b1 = abs(self._glidingDeltaRatio * self._filterCoefficients_target.b1)
+        self._snapError_b2 = abs(self._glidingDeltaRatio * self._filterCoefficients_target.b2)
+        self._snapError_a1 = abs(self._glidingDeltaRatio * self._filterCoefficients_target.a1)
+        self._snapError_a2 = abs(self._glidingDeltaRatio * self._filterCoefficients_target.a2)
+
     cpdef reachStationaryState(self, double stationaryInput):
-        cdef double den = (1.0 + self._filterCoefficients.a1 + self._filterCoefficients.a2)
+        cdef double den = (1.0 + self._filterCoefficients_current.a1 + self._filterCoefficients_current.a2)
         if den == 0.0:
             return
-        cdef double DC_gain = stationaryInput * (self._filterCoefficients.b0 + self._filterCoefficients.b1 + self._filterCoefficients.b2) / den
-        self._s1 = DC_gain - self._filterCoefficients.b0 * stationaryInput
-        self._s2 = self._s1 - self._filterCoefficients.b1 * stationaryInput + self._filterCoefficients.a1 * DC_gain
+        cdef double DC_gain = stationaryInput * (self._filterCoefficients_current.b0 + self._filterCoefficients_current.b1 + self._filterCoefficients_current.b2) / den
+        self._s1 = DC_gain - self._filterCoefficients_current.b0 * stationaryInput
+        self._s2 = self._s1 - self._filterCoefficients_current.b1 * stationaryInput + self._filterCoefficients_current.a1 * DC_gain
 
 # --------------- Additional filter tools --------------
 
     cpdef computeComplexBiquadFilterResponse(self, normalizedFreqBins):
-        cdef complex b0 = self._filterCoefficients.b0
-        cdef complex b1 = self._filterCoefficients.b1
-        cdef complex b2 = self._filterCoefficients.b2
-        cdef complex a0 = self._filterCoefficients.a0
-        cdef complex a1 = self._filterCoefficients.a1
-        cdef complex a2 = self._filterCoefficients.a2
-        cdef double w0  = abs(math.acos(-self._filterCoefficients.a1 / 2.0))
-        cdef complex Q  = math.sin(w0) / (2.0 * self._filterCoefficients.b0)
+        cdef complex b0 = self._filterCoefficients_current.b0
+        cdef complex b1 = self._filterCoefficients_current.b1
+        cdef complex b2 = self._filterCoefficients_current.b2
+        cdef complex a0 = self._filterCoefficients_current.a0
+        cdef complex a1 = self._filterCoefficients_current.a1
+        cdef complex a2 = self._filterCoefficients_current.a2
+        cdef double w0  = abs(math.acos(-self._filterCoefficients_current.a1 / 2.0))
+        cdef complex Q  = math.sin(w0) / (2.0 * self._filterCoefficients_current.b0)
         cdef complex pi = math.pi
         cdef complex f
         import cmath
