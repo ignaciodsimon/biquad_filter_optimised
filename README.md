@@ -9,11 +9,7 @@ parameters (type, frequency, gain and Q).
 
 From your terminal, run:
 
-    python -m pip install https://github.com/ignaciodsimon/biquad_filter_optimised/archive/refs/heads/master.zip
-
-If you get this error "ImportError: No module named 'Cython'", install this first:
-
-    python -m pip install setuptools
+    python -m pip install git+https://github.com/ignaciodsimon/biquad_filter_optimised.git
 
 ## Use example
 
